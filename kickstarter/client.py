@@ -37,25 +37,32 @@ class KickstarterClient:
         self._last_request_at = time.monotonic()
 
     def _request(self, method: str, url: str, **kwargs):
-        """재시도/백오프를 적용한 단일 요청. 403/429면 세션을 갈아엎는다."""
+        """재시도/백오프를 적용한 단일 요청.
+
+        403/429(Cloudflare 봇 차단)는 시간 기반이라 세션 재생성 + 점점 긴 쿨다운으로 대기.
+        긴 크롤링이 일시적 차단 하나로 죽지 않도록 넉넉히 재시도한다.
+        """
         last_error = None
         for attempt in range(config.MAX_RETRIES + 1):
-            if attempt > 0:
-                wait = config.RETRY_BACKOFF * attempt
-                logger.warning("재시도 %d/%d (%.0f초 대기): %s", attempt, config.MAX_RETRIES, wait, url)
-                time.sleep(wait)
             self._throttle()
             try:
                 resp = self.session.request(method, url, timeout=30, **kwargs)
             except Exception as e:
                 last_error = e
+                time.sleep(config.RETRY_BACKOFF * (attempt + 1))
                 continue
             if resp.status_code in (403, 429):
                 last_error = RuntimeError(f"HTTP {resp.status_code}: {url}")
+                # Cloudflare 차단: 세션 새로 만들고 점점 길게 대기 (20, 40, 60, ... 초)
                 self._new_session()
+                cooldown = min(config.BLOCK_COOLDOWN * (attempt + 1), config.BLOCK_COOLDOWN_MAX)
+                logger.warning("HTTP %d 차단 — 세션 재생성 후 %.0f초 대기 (재시도 %d/%d)",
+                               resp.status_code, cooldown, attempt + 1, config.MAX_RETRIES)
+                time.sleep(cooldown)
                 continue
             if resp.status_code >= 500:
                 last_error = RuntimeError(f"HTTP {resp.status_code}: {url}")
+                time.sleep(config.RETRY_BACKOFF * (attempt + 1))
                 continue
             return resp
         raise last_error
