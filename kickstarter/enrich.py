@@ -28,6 +28,22 @@ query GetProject($slug: String!) {
     isProjectWeLove
     video { id }
     posts { totalCount }
+    environmentalCommitments {
+      commitmentCategory
+      description
+    }
+    aiDisclosure {
+      involvesAi
+      involvesGeneration
+      involvesFunding
+      involvesOther
+      generatedByAiDetails
+      generatedByAiConsent
+      otherAiDetails
+      fundingForAiOption
+      fundingForAiConsent
+      fundingForAiAttribution
+    }
     creator {
       id
       name
