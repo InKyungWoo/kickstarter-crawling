@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 ILLEGAL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 COLUMNS = [
-    "project_url", "title", "blurb", "story_text", "story_truncated", "state",
+    "project_url", "title", "blurb", "story_text", "story_truncated", "state", "category",
     "backers_count", "goal", "pledged", "currency",
     "usd_rate_campaign", "usd_pledged", "usd_rate_current", "usd_pledged_current", "percent_funded",
     "has_photos", "photo_count", "has_video", "story_video_count", "has_main_video",
@@ -86,6 +86,7 @@ def build_row(p: dict) -> dict:
         "story_text": ILLEGAL_CHARS.sub("", story_text)[:config.EXCEL_CELL_LIMIT],
         "story_truncated": truncated,
         "state": p.get("state"),
+        "category": (p.get("category") or {}).get("name"),
         "backers_count": g.get("backersCount", p.get("backers_count")),
         "goal": p.get("goal"),
         "pledged": p.get("pledged"),    ## 원금
@@ -127,13 +128,29 @@ def unique_path(path):
 
 def run_export(fmt: str = "xlsx") -> None:
     config.OUTPUT_DIR.mkdir(exist_ok=True)
-    with open(config.ENRICHED_FILE, encoding="utf-8") as f:
+    # 최신 목록 파일을 기준으로 삼고, 상세 수집 파일에서는 _graph만 가져온다
+    # (enriched 파일에는 과거 실행의 낡은 분류 정보가 남아 있을 수 있음)
+    with open(config.LIST_FILE, encoding="utf-8") as f:
         projects = [json.loads(line) for line in f]
+    graphs = {}
+    with open(config.ENRICHED_FILE, encoding="utf-8") as f:
+        for line in f:
+            r = json.loads(line)
+            graphs[r["id"]] = r.get("_graph")
+    missing = 0
+    for p in projects:
+        p["_graph"] = graphs.get(p["id"])
+        if p["_graph"] is None:
+            missing += 1
+    if missing:
+        logger.warning("[export] 상세 데이터 없는 프로젝트 %d개 (enrich 미실행분)", missing)
     date_str = datetime.now().strftime("%Y-%m-%d")
 
     frames: dict[str, pd.DataFrame] = {}
     for key, cat in config.CATEGORIES.items():
-        rows = [build_row(p) for p in projects if p.get("_category_key") == key]
+        rows = [build_row(p) for p in projects
+                if p.get("_category_key") == key
+                and (p.get("category") or {}).get("id") == cat["id"]]
         if rows:
             frames[cat["name"]] = pd.DataFrame(rows, columns=COLUMNS)
 

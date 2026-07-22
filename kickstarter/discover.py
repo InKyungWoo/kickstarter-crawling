@@ -30,9 +30,16 @@ def fetch_state_projects(client: KickstarterClient, category_id: int, state: str
         page_projects = data.get("projects", [])
         if not page_projects:
             break
-        projects.extend(page_projects)
-        logger.info("  %s / page %d: +%d (누적 %d, total_hits=%s)",
-                    state, page, len(page_projects), len(projects), data.get("total_hits"))
+        # discover는 검색엔진이라 연관 프로젝트(다른 카테고리)를 끼워 보내므로
+        # 요청한 카테고리와 정확히 일치하는 것만 남긴다!!!
+        matched = [p for p in page_projects
+                   if (p.get("category") or {}).get("id") == category_id]
+        dropped = len(page_projects) - len(matched)
+        projects.extend(matched)
+        logger.info("  %s / page %d: +%d%s (누적 %d, total_hits=%s)",
+                    state, page, len(matched),
+                    f" (타 카테고리 {dropped}개 제외)" if dropped else "",
+                    len(projects), data.get("total_hits"))
         if len(projects) >= limit:
             break
         if not data.get("has_more"):
