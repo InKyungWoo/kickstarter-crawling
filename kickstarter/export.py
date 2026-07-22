@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 
 import pandas as pd
 from bs4 import BeautifulSoup
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
 
 import config
 
@@ -18,7 +20,8 @@ ILLEGAL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 COLUMNS = [
     "project_url", "title", "blurb", "story_text", "story_truncated", "state",
-    "backers_count", "goal", "pledged", "currency", "usd_pledged", "percent_funded",
+    "backers_count", "goal", "pledged", "currency",
+    "usd_rate_campaign", "usd_pledged", "usd_rate_current", "usd_pledged_current", "percent_funded",
     "has_photos", "photo_count", "has_video", "story_video_count", "has_main_video",
     "start_date", "end_date", "duration_days",
     "creator_name", "creator_badges", "creator_created_count", "creator_backed_count",
@@ -48,6 +51,22 @@ def build_row(p: dict) -> dict:
     creator_g = g.get("creator") or {}
     story_text, img_count, video_count = parse_story(g.get("story"))
 
+    risks = (g.get("risks") or "").strip()
+    if risks:
+        story_text = f"{story_text}\n\nRisks and challenges\n{risks}".strip()
+    env_texts = [(e.get("description") or "").strip()
+                 for e in (g.get("environmentalCommitments") or [])]
+    env_texts = [t for t in env_texts if t]
+    if env_texts:
+        story_text = (story_text + "\n\nEnvironmental commitments\n" + "\n\n".join(env_texts)).strip()
+    ai = g.get("aiDisclosure") or {}
+    if ai.get("involvesAi"):
+        ai_texts = [str(ai[k]).strip() for k in
+                    ("generatedByAiDetails", "generatedByAiConsent", "otherAiDetails",
+                     "fundingForAiOption", "fundingForAiConsent", "fundingForAiAttribution")
+                    if ai.get(k)]
+        story_text = (story_text + "\n\nUse of AI\n" + "\n\n".join(ai_texts)).strip()
+
     badges = list(creator_g.get("badges") or [])
     if creator_g.get("isSuperbacker") and "Superbacker" not in badges:
         badges.append("Superbacker")
@@ -69,9 +88,12 @@ def build_row(p: dict) -> dict:
         "state": p.get("state"),
         "backers_count": g.get("backersCount", p.get("backers_count")),
         "goal": p.get("goal"),
-        "pledged": p.get("pledged"),
-        "currency": p.get("currency"),
-        "usd_pledged": round(float(p.get("usd_pledged") or 0), 2),
+        "pledged": p.get("pledged"),    ## 원금
+        "currency": p.get("currency"),  ## 원금 통화
+        "usd_rate_campaign": round(float(p["static_usd_rate"]), 4) if p.get("static_usd_rate") else None,   ## 당시 환율
+        "usd_pledged": round(float(p.get("usd_pledged") or 0), 2),  ## 당시 환율 적용값
+        "usd_rate_current": round(float(p["fx_rate"]), 4) if p.get("fx_rate") else None, ## 수집 시점 환율
+        "usd_pledged_current": round(float(p.get("pledged") or 0) * float(p["fx_rate"]), 2) if p.get("fx_rate") else None,  ## 수집 시점 환율 적용값 (페이지 표시)
         "percent_funded": g.get("percentFunded", p.get("percent_funded")),
         "has_photos": img_count > 0,
         "photo_count": img_count,
@@ -91,10 +113,23 @@ def build_row(p: dict) -> dict:
     }
 
 
+def unique_path(path):
+    """이미 같은 이름의 파일이 있으면 ' (1)', ' (2)'를 붙여 덮어쓰지 않는 경로를 돌려준다."""
+    if not path.exists():
+        return path
+    n = 1
+    while True:
+        candidate = path.with_name(f"{path.stem} ({n}){path.suffix}")
+        if not candidate.exists():
+            return candidate
+        n += 1
+
+
 def run_export(fmt: str = "xlsx") -> None:
     config.OUTPUT_DIR.mkdir(exist_ok=True)
     with open(config.ENRICHED_FILE, encoding="utf-8") as f:
         projects = [json.loads(line) for line in f]
+    date_str = datetime.now().strftime("%Y-%m-%d")
 
     frames: dict[str, pd.DataFrame] = {}
     for key, cat in config.CATEGORIES.items():
@@ -104,17 +139,34 @@ def run_export(fmt: str = "xlsx") -> None:
 
     if fmt == "csv":
         for name, df in frames.items():
-            path = config.OUTPUT_DIR / f"kickstarter_{name.lower().replace(' ', '_')}.csv"
+            path = unique_path(config.OUTPUT_DIR / f"kickstarter_{name.lower().replace(' ', '_')}_{date_str}.csv")
             df.to_csv(path, index=False, encoding="utf-8-sig")
             logger.info("[export] %s: %d행 → %s", name, len(df), path)
         return
 
-    with pd.ExcelWriter(config.EXCEL_FILE, engine="openpyxl") as writer:
+    top_align = Alignment(vertical="top")
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill(fill_type="solid", start_color="4472C4", end_color="4472C4")
+    excel_path = unique_path(config.OUTPUT_DIR / f"{config.EXCEL_BASENAME}_{date_str}.xlsx")
+    with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
         for name, df in frames.items():
             df.to_excel(writer, sheet_name=name, index=False)
             ws = writer.sheets[name]
             ws.freeze_panes = "A2"
-            for col_letter, width in [("A", 45), ("B", 35), ("C", 40), ("D", 60)]:
-                ws.column_dimensions[col_letter].width = width
+            # story_text는 고정 너비, 나머지는 내용 길이에 맞춰 자동 조절
+            for idx, col_name in enumerate(df.columns, start=1):
+                letter = get_column_letter(idx)
+                if col_name == "story_text":
+                    width = 60
+                else:
+                    max_len = max(len(str(v)) for v in [col_name, *df[col_name].fillna("")])
+                    width = min(max_len + 2, 100)
+                ws.column_dimensions[letter].width = width
+            for row in ws.iter_rows():
+                for cell in row:
+                    cell.alignment = top_align
+            for cell in ws[1]:
+                cell.font = header_font
+                cell.fill = header_fill
             logger.info("[export] 시트 %s: %d행", name, len(df))
-    logger.info("[export] 완료 → %s", config.EXCEL_FILE)
+    logger.info("[export] 완료 → %s", excel_path)

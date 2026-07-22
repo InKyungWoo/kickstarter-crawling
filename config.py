@@ -30,6 +30,6 @@ DATA_DIR = PROJECT_ROOT / "data"
 OUTPUT_DIR = PROJECT_ROOT / "output"
 LIST_FILE = DATA_DIR / "projects_list.jsonl"
 ENRICHED_FILE = DATA_DIR / "projects_enriched.jsonl"
-EXCEL_FILE = OUTPUT_DIR / "kickstarter_projects.xlsx"
+EXCEL_BASENAME = "kickstarter_projects"
 
 EXCEL_CELL_LIMIT = 32767     # Excel 셀 하나의 최대 문자 수
