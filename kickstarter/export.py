@@ -151,6 +151,7 @@ def runs_to_cells(runs: list[tuple[str, str | None]], limit: int) -> list[CellRi
             used += len(piece)
     if blocks:
         flush()
+
     return cells or [CellRichText("")]
 
 
@@ -162,6 +163,7 @@ def cell_to_plain(cell: CellRichText) -> str:
 def fmt_date(ts) -> str | None:
     if not ts:
         return None
+
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
 
 
@@ -181,7 +183,7 @@ def build_row(p: dict, img_count: int, video_count: int) -> dict:
 
     launched, deadline = p.get("launched_at"), p.get("deadline")
 
-    return {
+    row = {
         "project_url": (p.get("urls") or {}).get("web", {}).get("project"),
         "title": p.get("name"),
         "blurb": p.get("blurb"),
@@ -212,6 +214,8 @@ def build_row(p: dict, img_count: int, video_count: int) -> dict:
         "updates_count": (g.get("posts") or {}).get("totalCount"),
         "comments_count": g.get("commentsCount"),
     }
+    
+    return {k: ILLEGAL_CHARS.sub("", v) if isinstance(v, str) else v for k, v in row.items()}
 
 
 def unique_path(path):
@@ -243,6 +247,7 @@ def _build_sheet(sel_projects: list[dict]):
             row[name] = cell_to_plain(cells[i]) if i < len(cells) else ""
 
     columns = COLUMNS_LEAD + story_cols + COLUMNS_TAIL
+
     return pd.DataFrame(rows, columns=columns), cells_per_row, story_cols
 
 
@@ -291,7 +296,7 @@ def run_export(fmt: str = "xlsx") -> None:
 
 
 def _write_xlsx(path, sheet_name: str, df: pd.DataFrame, cells_per_row: list, story_cols: list) -> None:
-    """한 청크를 스타일 적용해 xlsx 파일로 쓴다."""
+    """한 청크를 스타일 적용해 xlsx 파일로 쓴다"""
     top_align = Alignment(vertical="top")
     header_font = Font(bold=True, color="FFFFFF")
     header_fill = PatternFill(fill_type="solid", start_color="4472C4", end_color="4472C4")
